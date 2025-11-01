@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JSON Table Viewer</title>
+<style>
+:root {
+  --bg:#121212; --fg:#e0e0e0; --border:#333; --accent:#0078d7; --highlight:#1f1f1f;
+  --group-icon:'👥';
+  --sort-active-color:#fff;
+  --sort-inactive-color:#888;
+}
+body.light {
+  --bg:#f5f5f5; --fg:#121212; --border:#ccc; --accent:#0078d7; --highlight:#e8e8e8;
+  --sort-active-color:#0078d7;
+  --sort-inactive-color:#aaa;
+}
+body {
+  font-family: Arial,sans-serif;
+  margin: 20px;
+  background: var(--bg);
+  color: var(--fg);
+  transition: 0.3s;
+}
+
+/* Title row with moon toggle */
+#titleRow {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  margin-bottom: 5px;
+}
+h1 {
+  margin:0;
+  text-align:center;
+}
+#toggleTheme {
+  position: absolute;
+  right: 0;
+  font-size: 1.5em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+}
+body.light #toggleTheme { color: #000; }
+
+/* Search & export row */
+#controlRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+/* Search input */
+#search {
+  padding: 6px;
+  width: 200px;
+  background: #1e1e1e;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+body.light #search { background: #fff; color: var(--fg); }
+
+/* Export buttons */
+#exportButtons {
+  display: flex;
+  gap: 5px;
+}
+#exportButtons button {
+  padding: 6px 10px;
+  cursor: pointer;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 4px;
+}
+#exportButtons button:hover { background: #1590ff; }
+
+/* Table styling */
+table { border-collapse: collapse; width: 100%; background: var(--highlight); color: var(--fg); transition: 0.3s; }
+th, td { padding: 10px; border: 1px solid var(--border); text-align: left; vertical-align: middle; }
+th { background: #222; }
+body.light th { background: #ddd; }
+
+/* Sort and group buttons in header */
+th button.sort-btn,
+th button.group-btn {
+  margin-left: 5px;
+  padding: 2px 4px;
+  font-size: 0.9em;
+  line-height: 1em;
+  border-radius: 4px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+th button.group-btn.inactive { color:#888; opacity:0.5; }
+th button.group-btn.active { color:#fff; opacity:1; font-weight:bold; }
+body.light th button.group-btn.active { color:#0078d7; }
+body.light th button.group-btn.inactive { color:#aaa; opacity:0.6; }
+th button.sort-btn.inactive { color: var(--sort-inactive-color); opacity:0.5; font-weight: normal; }
+th button.sort-btn.active { color: var(--sort-active-color); opacity:1; font-weight: bold; }
+
+.group-row { background: #444; color: #fff; font-weight: bold; cursor: pointer; position: relative; }
+body.light .group-row { background: #ccc; color: #000; }
+.group-row::after { content: '▼'; display: inline-block; margin-left: 0.5em; float: right; transition: transform 0.2s; }
+.group-row.collapsed::after { content: '►'; }
+
+tr:nth-child(even) { background: #181818; }
+tr:hover { background: var(--highlight); }
+body.light tr:nth-child(even) { background: #f1f1f1; }
+body.light tr:hover { background: #e0e0e0; }
+
+#status { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+</style>
+</head>
+<body class="dark">
+
+<!-- Title + Moon -->
+<div id="titleRow">
+  <h1>JSON Table Viewer</h1>
+  <button id="toggleTheme" aria-label="Toggle light/dark mode">🌙</button>
+</div>
+
+<!-- Search and Export -->
+<div id="controlRow">
+  <input type="text" id="search" placeholder="Search table data" aria-label="Search data">
+  <div id="exportButtons">
+    <button id="exportCSV" aria-label="Export CSV">Export CSV</button>
+    <button id="exportJSON" aria-label="Export JSON">Export JSON</button>
+  </div>
+</div>
+
+<table id="dataTable" role="table"></table>
+<div id="status" aria-live="polite"></div>
+
+<script>
+// CONFIG
+let groupIcon = '👥';
+
+// DATA
+const jsonData = [
+  { "id": 1, "name": "Alice", "role": "Developer", "date": "2025-10-29" },
+  { "id": 2, "name": "Bob", "role": "Designer", "date": "2025-10-30" },
+  { "id": 3, "name": "Charlie", "role": "Manager", "date": "2025-10-28" },
+  { "id": 4, "name": "Dana", "role": "Tester", "date": "2025-10-31" },
+  { "id": 5, "name": "Eve", "role": "Developer", "date": "2025-10-27" },
+  { "id": 6, "name": "Frank", "role": "Designer", "date": "2025-10-26" }
+];
+
+const table = document.getElementById('dataTable');
+const searchInput = document.getElementById('search');
+const status = document.getElementById('status');
+
+let sortColumn = Object.keys(jsonData[0])[0];
+let sortDirection = 1;
+let filteredData = [...jsonData];
+let groupingEnabled = false;
+let groupColumn = null;
+
+Object.defineProperty(HTMLElement.prototype,'nextSiblings',{get:function(){let sib=[];let el=this.nextElementSibling;while(el){sib.push(el);el=el.nextElementSibling;}return sib;}});
+
+function renderTable(data){
+  table.innerHTML='';
+  if(!data.length){ table.innerHTML='<tr><td colspan="99">No data found</td></tr>'; return; }
+
+  const header = document.createElement('tr');
+  Object.keys(data[0]).forEach(key=>{
+    const th = document.createElement('th');
+    th.textContent = key;
+
+    const sortBtn = document.createElement('button');
+    sortBtn.textContent = (key===sortColumn ? (sortDirection===1?'▼':'▲') : '▼');
+    sortBtn.classList.add('sort-btn');
+    sortBtn.classList.toggle('active', sortColumn===key);
+    sortBtn.classList.toggle('inactive', sortColumn!==key);
+    sortBtn.onclick=()=>{ toggleSort(key); };
+    th.appendChild(sortBtn);
+
+    const groupBtn = document.createElement('button');
+    groupBtn.textContent = groupIcon;
+    groupBtn.classList.add('group-btn');
+    groupBtn.classList.toggle('active', groupingEnabled && groupColumn===key);
+    groupBtn.classList.toggle('inactive', !(groupingEnabled && groupColumn===key));
+    groupBtn.onclick=()=>{
+      groupingEnabled = !(groupingEnabled && groupColumn===key);
+      groupColumn = groupingEnabled ? key : null;
+      renderTable(filteredData);
+    };
+    th.appendChild(groupBtn);
+
+    header.appendChild(th);
+  });
+  table.appendChild(header);
+
+  if(groupingEnabled && groupColumn){
+    let grouped = {};
+    data.forEach(row=>{
+      const g = row[groupColumn]||'Ungrouped';
+      if(!grouped[g]) grouped[g]=[];
+      grouped[g].push(row);
+    });
+    for(const group in grouped){
+      const tr = document.createElement('tr');
+      tr.className='group-row'; tr.tabIndex=0;
+      tr.innerHTML=`<td colspan="${Object.keys(data[0]).length}">${group} (${grouped[group].length})</td>`;
+      let collapsed = false;
+      tr.onclick=()=>{
+        collapsed=!collapsed;
+        tr.classList.toggle('collapsed',collapsed);
+        for(const r of tr.nextSiblings){ if(r.dataset.group===group) r.style.display=collapsed?'none':'' }
+      };
+      tr.onkeypress=(e)=>{if(e.key==='Enter'){ tr.click(); }};
+      table.appendChild(tr);
+
+      grouped[group].forEach(row=>{
+        const trd = document.createElement('tr'); trd.dataset.group = group;
+        Object.values(row).forEach(val=>{
+          const td = document.createElement('td');
+          if(/^\d{4}-\d{2}-\d{2}$/.test(val)) td.textContent=new Date(val).toLocaleDateString();
+          else td.textContent = val;
+          trd.appendChild(td);
+        });
+        table.appendChild(trd);
+      });
+    }
+  } else {
+    data.forEach(row=>{
+      const tr = document.createElement('tr');
+      Object.values(row).forEach(val=>{
+        const td = document.createElement('td');
+        if(/^\d{4}-\d{2}-\d{2}$/.test(val)) td.textContent=new Date(val).toLocaleDateString();
+        else td.textContent = val;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+  }
+  status.textContent=`${data.length} rows displayed${groupingEnabled?' (grouped by '+groupColumn+')':''}.`;
+}
+
+function toggleSort(column){
+  if(sortColumn===column) sortDirection*=-1;
+  else{ sortColumn=column; sortDirection=1; }
+  filteredData.sort((a,b)=>{
+    const valA=a[column], valB=b[column];
+    if(/^\d{4}-\d{2}-\d{2}$/.test(valA) && /^\d{4}-\d{2}-\d{2}$/.test(valB)) return (new Date(valA)-new Date(valB))*sortDirection;
+    if(valA>valB) return sortDirection;
+    if(valA<valB) return -sortDirection;
+    return 0;
+  });
+  renderTable(filteredData);
+}
+
+searchInput.addEventListener('input', e=>{
+  const term = e.target.value.toLowerCase();
+  filteredData = jsonData.filter(row => Object.values(row).some(v=>String(v).toLowerCase().includes(term)));
+  renderTable(filteredData);
+});
+
+document.getElementById('exportCSV').onclick=()=>{ 
+  const csv = [Object.keys(jsonData[0]).join(','), ...filteredData.map(r=>Object.values(r).join(','))].join('\n'); 
+  downloadFile(csv,'data.csv','text/csv'); 
+};
+document.getElementById('exportJSON').onclick=()=>{ 
+  downloadFile(JSON.stringify(filteredData,null,2),'data.json','application/json'); 
+};
+function downloadFile(content,filename,type){ 
+  const blob = new Blob([content],{type}); 
+  const a = document.createElement('a'); 
+  a.href = URL.createObjectURL(blob); 
+  a.download = filename; 
+  a.click(); 
+}
+
+// Theme toggle
+const themeBtn = document.getElementById('toggleTheme');
+themeBtn.onclick=()=>{ 
+  const isLight = document.body.classList.toggle('light');
+  document.body.classList.toggle('dark', !isLight);
+  themeBtn.textContent = isLight ? '☀️' : '🌙';
+};
+
+// Initial sort & render
+filteredData.sort((a,b)=>{
+  const valA=a[sortColumn], valB=b[sortColumn];
+  if(/^\d{4}-\d{2}-\d{2}$/.test(valA) && /^\d{4}-\d{2}-\d{2}$/.test(valB)) return (new Date(valA)-new Date(valB))*sortDirection;
+  if(valA>valB) return sortDirection;
+  if(valA<valB) return -sortDirection;
+  return 0;
+});
+renderTable(filteredData);
+</script>
+</body>
+</html>
